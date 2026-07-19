@@ -177,8 +177,7 @@ export function initInstall({ connectButton, statusEl }) {
   if (!isWebSerialSupported()) {
     connectButton.disabled = true;
     status(
-      "Web Serial is not available in this browser, so installing is disabled. " +
-        "Use Chrome, Edge or Opera, or deploy a font with: mpremote romfs deploy <font>.ppf",
+      "Web Serial is not available in this browser, so installing is disabled. Use Chrome, Edge or Opera.",
       "bad",
     );
   } else {
