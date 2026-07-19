@@ -1,0 +1,15 @@
+{
+  "name": "icon-af-fonts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Build PicoVector .af vector fonts from nikoichu's 1-bit Pixel Icons",
+  "license": "CC0-1.0",
+  "scripts": {
+    "verify": "node verify-af.mjs",
+    "verify:render": "node verify-render.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  }
+}

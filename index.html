@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Icon Vector Fonts (.af)</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    font: 15px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+    background: #0e1116; color: #e6edf3;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .credit { margin: 0 0 16px; color: #8b949e; }
+  .credit a { color: #58a6ff; }
+  .bar { position: sticky; top: 0; padding: 12px 0; background: #0e1116; z-index: 2; }
+  #q {
+    width: 100%; padding: 10px 12px; font: inherit;
+    background: #161b22; color: inherit;
+    border: 1px solid #30363d; border-radius: 8px;
+  }
+  .cats { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 2px; }
+  .cats button {
+    font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer;
+    background: #161b22; color: #8b949e;
+    border: 1px solid #30363d; border-radius: 999px;
+  }
+  .cats button:hover { border-color: #58a6ff; color: #e6edf3; }
+  .cats button.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  #count { color: #8b949e; margin: 8px 0 16px; }
+  .group h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: #8b949e; margin: 22px 0 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;
+  }
+  .grid {
+    display: grid; gap: 12px;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+  .cell {
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    padding: 16px 8px 12px; border: 1px solid #30363d; border-radius: 10px;
+    cursor: pointer; text-align: center; background: #161b22;
+  }
+  .cell:hover { border-color: #58a6ff; }
+  .cell.copied { border-color: #3fb950; }
+  .cell canvas { width: 84px; height: 84px; }
+  .cell .nm { font-size: 11px; color: #e6edf3; word-break: break-all; line-height: 1.3; }
+  .cell .ch {
+    font-size: 11px; color: #8b949e;
+    background: #0e1116; border: 1px solid #21262d; border-radius: 5px; padding: 1px 6px;
+  }
+</style>
+</head>
+<body>
+  <h1>Icon Vector Fonts <span style="color:#8b949e;font-weight:400">.af</span></h1>
+  <p class="credit">
+    PicoVector Alright Fonts built from
+    <a href="https://nikoichu.itch.io/pixel-icons">nikoichu's 1-bit Pixel Icons</a>,
+    one font per category, each icon mapped to a printable character like Wingdings.
+    Rendered here by the on-device decoder <code>af.js</code>. Click a tile to copy its character.
+    Get the font files from <a href="https://github.com/Gadgetoid/iconfont-af">https://github.com/Gadgetoid/iconfont-af</a>.
+  </p>
+  <div class="bar">
+    <input id="q" type="search" placeholder="Search icons across all fonts..." autocomplete="off">
+    <div class="cats" id="cats"></div>
+  </div>
+  <div id="count"></div>
+  <div id="out"></div>
+
+  <script src="dist/fonts.js"></script>
+  <script type="module">
+    import { afParse, afMeasure, afRender } from "./af.js";
+
+    const fonts = window.AF_FONTS || [];
+    const out = document.getElementById("out");
+    const count = document.getElementById("count");
+    const catsEl = document.getElementById("cats");
+    const q = document.getElementById("q");
+
+    const bytesOf = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+    for (const f of fonts) f.parsed = afParse(bytesOf(f.b64).buffer);
+
+    const DPR = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+    const BOX = 84;        // tile canvas size in CSS pixels
+    const SIZE = 66;       // glyph em-height in pixels (scalable vector)
+
+    function tile(font, g) {
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      cell.title = `char: ${g.char}   U+${g.code.toUpperCase()}\n` +
+        `name: ${g.name}\nfull: ${g.full}` +
+        (g.aliases.length ? `\naliases: ${g.aliases.join(", ")}` : "");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = BOX * DPR;
+      canvas.height = BOX * DPR;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(DPR, DPR);
+      // Centre the glyph in the tile using its measured advance.
+      const w = afMeasure(font.parsed, g.char, SIZE);
+      afRender(font.parsed, ctx, g.char, (BOX - w) / 2, (BOX - SIZE) / 2, SIZE, "#e6edf3");
+
+      const nm = document.createElement("div");
+      nm.className = "nm";
+      nm.textContent = g.name;
+      const ch = document.createElement("div");
+      ch.className = "ch";
+      ch.textContent = g.char === " " ? "space" : g.char;
+
+      cell.append(canvas, nm, ch);
+      cell.onclick = () => {
+        navigator.clipboard?.writeText(g.char);
+        cell.classList.add("copied");
+        setTimeout(() => cell.classList.remove("copied"), 600);
+      };
+      return cell;
+    }
+
+    const hay = g => [g.name, g.full, ...(g.aliases || [])].join(" ").toLowerCase();
+    let activeCat = null;
+
+    function render() {
+      const f = q.value.trim().toLowerCase();
+      out.replaceChildren();
+      let shown = 0, total = 0;
+      for (const font of fonts) {
+        total += font.glyphs.length;
+        if (activeCat && font.category !== activeCat) continue;
+        const list = f ? font.glyphs.filter(g => hay(g).includes(f)) : font.glyphs;
+        if (!list.length) continue;
+
+        const group = document.createElement("div");
+        group.className = "group";
+        const h2 = document.createElement("h2");
+        h2.textContent = `${font.title} · ${list.length} icons · ${font.file}`;
+        const grid = document.createElement("div");
+        grid.className = "grid";
+        const frag = document.createDocumentFragment();
+        for (const g of list) { frag.appendChild(tile(font, g)); shown++; }
+        grid.appendChild(frag);
+        group.append(h2, grid);
+        out.appendChild(group);
+      }
+      count.textContent = `${shown} of ${total} icons` +
+        (activeCat ? ` in ${fonts.find(x => x.category === activeCat).title}` : "");
+    }
+
+    const allBtn = document.createElement("button");
+    allBtn.textContent = "All";
+    allBtn.className = "on";
+    catsEl.appendChild(allBtn);
+    const buttons = [allBtn];
+    for (const font of fonts) {
+      const b = document.createElement("button");
+      b.textContent = font.title;
+      b.onclick = () => { activeCat = font.category; setActive(b); render(); };
+      catsEl.appendChild(b);
+      buttons.push(b);
+    }
+    allBtn.onclick = () => { activeCat = null; setActive(allBtn); render(); };
+    function setActive(btn) { buttons.forEach(x => x.classList.toggle("on", x === btn)); }
+
+    q.addEventListener("input", render);
+    render();
+  </script>
+</body>
+</html>
