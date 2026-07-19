@@ -29,11 +29,31 @@
   }
   .cats button:hover { border-color: #58a6ff; color: #e6edf3; }
   .cats button.on { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+  .install { display: flex; align-items: center; gap: 10px; margin: 10px 0 2px; flex-wrap: wrap; }
+  #connect {
+    font: inherit; font-size: 12px; padding: 5px 12px; cursor: pointer;
+    background: #161b22; color: #e6edf3;
+    border: 1px solid #1f6feb; border-radius: 6px;
+  }
+  #connect:hover:not(:disabled) { border-color: #58a6ff; }
+  .istatus { color: #8b949e; font-size: 12px; }
+  .istatus.ok { color: #3fb950; }
+  .istatus.bad { color: #f85149; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
   #count { color: #8b949e; margin: 8px 0 16px; }
   .group h2 {
+    display: flex; align-items: center; gap: 10px;
     font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
     color: #8b949e; margin: 22px 0 10px; border-bottom: 1px solid #21262d; padding-bottom: 6px;
   }
+  .group h2 .h2-title { flex: 1; }
+  .install-btn {
+    font: inherit; font-size: 11px; text-transform: none; letter-spacing: normal;
+    padding: 3px 10px; cursor: pointer;
+    background: #161b22; color: #e6edf3;
+    border: 1px solid #30363d; border-radius: 6px;
+  }
+  .install-btn:hover:not(:disabled) { border-color: #58a6ff; }
   .grid {
     display: grid; gap: 12px;
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -65,6 +85,10 @@
   <div class="bar">
     <input id="q" type="search" placeholder="Search icons across all fonts..." autocomplete="off">
     <div class="cats" id="cats"></div>
+    <div class="install">
+      <button id="connect">Connect badge</button>
+      <span id="install-status" class="istatus"></span>
+    </div>
   </div>
   <div id="count"></div>
   <div id="out"></div>
@@ -72,6 +96,12 @@
   <script src="dist/fonts.js"></script>
   <script type="module">
     import { afParse, afMeasure, afRender } from "./af.js";
+    import { initInstall } from "./js/install.js";
+
+    const install = initInstall({
+      connectButton: document.getElementById("connect"),
+      statusEl: document.getElementById("install-status"),
+    });
 
     const fonts = window.AF_FONTS || [];
     const out = document.getElementById("out");
@@ -134,7 +164,15 @@
         const group = document.createElement("div");
         group.className = "group";
         const h2 = document.createElement("h2");
-        h2.textContent = `${font.title} · ${list.length} icons · ${font.file}`;
+        const h2title = document.createElement("span");
+        h2title.className = "h2-title";
+        h2title.textContent = `${font.title} · ${list.length} icons · ${font.file}`;
+        const installBtn = document.createElement("button");
+        installBtn.className = "install-btn";
+        installBtn.textContent = "Install";
+        installBtn.dataset.file = font.file;
+        installBtn.dataset.title = font.title;
+        h2.append(h2title, installBtn);
         const grid = document.createElement("div");
         grid.className = "grid";
         const frag = document.createDocumentFragment();
@@ -145,6 +183,7 @@
       }
       count.textContent = `${shown} of ${total} icons` +
         (activeCat ? ` in ${fonts.find(x => x.category === activeCat).title}` : "");
+      install.refreshButtons();
     }
 
     const allBtn = document.createElement("button");
