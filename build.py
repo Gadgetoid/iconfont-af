@@ -14,12 +14,18 @@ through the official `python_alright_fonts` encoder used by `afinate`. That
 encoder owns all of the `.af` coordinate/bbox/advance conventions, so the output
 matches what the on-device renderer expects.
 
+The sprites are two-tone: a white fill under black linework. Most icons read
+from the white fill, but framed icons (cards, numbered dice) carry their detail
+in the black linework, so two sets are emitted: the default from the white
+pixels, and an outline set from the black pixels.
+
 Self-contained; reads sprites and writes everything under `dist/`:
 
   ../1-bit_Pixel_Icons/Sprites          sprite source        (SPRITES to override)
   ../1-bit_Pixel_Icons/Icons_*.png      category name source
-  ./dist/<Category>.af                  one vector font per category
-  ./dist/fonts.js                       manifest (fonts embedded as base64) for the demo
+  ./dist/<Category>.af                  default vector font per category
+  ./dist/<Category>_outline.af          outline vector font per category
+  ./dist/fonts.js                       manifest (both sets, base64) for the preview page
 
 Icons by nikoichu: https://nikoichu.itch.io/pixel-icons
 """
@@ -72,6 +78,13 @@ def printable_codepoints():
 
 CODEPOINTS = list(printable_codepoints())
 
+# Sets to emit: (filename suffix, manifest key, which opaque tone to keep). The
+# default set keeps the white fill under the plain category name and fills the
+# top-level manifest fields; the outline set keeps the black linework, is
+# suffixed so both can share the badge's fonts/ directory, and nests under
+# "outline" in the manifest.
+VARIANTS = [("", None, "white"), ("_outline", "outline", "black")]
+
 
 def slugify(stem):
     s = re.sub(r"[^0-9a-z]+", "_", stem.lower()).strip("_")
@@ -97,13 +110,25 @@ def category_of(slug, cats):
     return slug.split("_")[0]
 
 
-def white_mask(path):
+def pixel_mask(path, ink):
+    """GRID x GRID booleans for the sprite's `ink` pixels ("white" or "black").
+
+    The sprites use only two opaque tones, so an opaque pixel that is not white
+    is black.
+    """
     im = Image.open(path).convert("RGBA")
     if im.size != (GRID, GRID):
         im = im.resize((GRID, GRID), Image.NEAREST)
     px = im.load()
-    return [[px[x, y][3] > 127 and px[x, y][0] > 200 and px[x, y][1] > 200 and px[x, y][2] > 200
-             for x in range(GRID)] for y in range(GRID)]
+    mask = [[False] * GRID for _ in range(GRID)]
+    for y in range(GRID):
+        for x in range(GRID):
+            r, g, b, a = px[x, y]
+            if a <= 127:
+                continue
+            white = r > 200 and g > 200 and b > 200
+            mask[y][x] = white if ink == "white" else not white
+    return mask
 
 
 # --- pixel tracing, shared with the web-font tool -----------------------------
@@ -363,20 +388,7 @@ def main():
         canonicals = assign_canonicals([short_candidates(b) for b in bodies])
         aliases = build_aliases(bodies, canonicals)
 
-        masks = [white_mask(p) for p in files]
         codepoints = CODEPOINTS[:len(files)]
-
-        fallbacks = []
-        ttf_buf = build_ttf(codepoints, files, masks, fallbacks)
-        data, kept_codepoints, max_points = encode_af(ttf_buf, codepoints)
-        all_fallbacks += fallbacks
-        worst_points = max(worst_points, max_points)
-
-        if kept_codepoints != codepoints:
-            missing = sorted(set(codepoints) - set(kept_codepoints))
-            raise SystemExit(f"{category}: encoder dropped codepoints {missing}")
-
-        (OUT / f"{category}.af").write_bytes(data)
 
         glyphs = []
         for cp, canonical, alias, path in zip(codepoints, canonicals, aliases, files):
@@ -387,22 +399,42 @@ def main():
                 "full": slugify(path.stem),
                 "aliases": alias,
             })
-        manifest.append({
+        entry = {
             "category": category,
             "title": titles.get(category, category.replace("_", " ")),
-            "file": f"{category}.af",
             "count": len(glyphs),
-            "b64": base64.b64encode(data).decode("ascii"),
             "glyphs": glyphs,
-        })
-        print(f"  {category:<14} {len(glyphs):>3} icons  max {max_points:>3} pts/path"
-              f"  {len(data):>5} B  -> {category}.af")
+        }
+
+        for suffix, key, ink in VARIANTS:
+            masks = [pixel_mask(p, ink) for p in files]
+            fallbacks = []
+            ttf_buf = build_ttf(codepoints, files, masks, fallbacks)
+            data, kept_codepoints, max_points = encode_af(ttf_buf, codepoints)
+            all_fallbacks += fallbacks
+            worst_points = max(worst_points, max_points)
+
+            if kept_codepoints != codepoints:
+                missing = sorted(set(codepoints) - set(kept_codepoints))
+                raise SystemExit(f"{category}{suffix}: encoder dropped codepoints {missing}")
+
+            rel = f"{category}{suffix}.af"
+            (OUT / rel).write_bytes(data)
+            block = {"file": rel, "b64": base64.b64encode(data).decode("ascii")}
+            if key is None:
+                entry.update(block)
+            else:
+                entry[key] = block
+            print(f"  {category:<14} {len(glyphs):>3} icons  max {max_points:>3} pts/path"
+                  f"  {len(data):>5} B  -> {rel}")
+
+        manifest.append(entry)
 
     payload = "window.AF_FONTS = " + json.dumps(manifest, separators=(",", ":")) + ";\n"
     (OUT / "fonts.js").write_text(payload, encoding="utf-8")
 
     total = sum(m["count"] for m in manifest)
-    print(f"{len(manifest)} fonts, {total} glyphs -> {OUT}/*.af + fonts.js")
+    print(f"{len(manifest)} categories x2 sets, {total} glyphs -> {OUT}/*.af + fonts.js")
     if worst_points > 256:
         print(f"WARNING: worst path has {worst_points} points; the device renderer "
               f"skips paths over 256")

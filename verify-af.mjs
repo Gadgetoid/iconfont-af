@@ -18,43 +18,50 @@ let ok = true;
 let glyphTotal = 0;
 
 for (const font of fonts) {
-  const bytes = readFileSync(resolve(dist, font.file));
-  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-  const problems = [];
+  // Each category ships the filled default and the outline set; check both.
+  const targets = [font.file];
+  if (font.outline) targets.push(font.outline.file);
 
-  let parsed;
-  try {
-    parsed = afParse(buf);
-  } catch (e) {
-    console.log(`FAIL  ${font.file}  did not parse: ${e.message}`);
-    ok = false;
-    continue;
-  }
+  for (const file of targets) {
+    const bytes = readFileSync(resolve(dist, file));
+    const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+    const problems = [];
 
-  if (parsed.glyphCount !== font.count)
-    problems.push(`glyphCount ${parsed.glyphCount} != ${font.count}`);
-  for (const g of font.glyphs) {
-    if (!parsed.cpMap.has(parseInt(g.code, 16)))
-      problems.push(`codepoint U+${g.code} (${g.name}) missing`);
-  }
-  // Every glyph must carry at least one path with usable points.
-  const empty = parsed.glyphs.filter(g => g.nPaths === 0 ||
-    g.paths.every(p => p.pc < 2)).length;
-  if (empty) problems.push(`${empty} glyphs have no drawable contour`);
+    let parsed;
+    try {
+      parsed = afParse(buf);
+    } catch (e) {
+      console.log(`FAIL  ${file}  did not parse: ${e.message}`);
+      ok = false;
+      continue;
+    }
 
-  const text = font.glyphs.map(g => g.char).join('');
-  if (afMeasure(parsed, text, 128) <= 0) problems.push('measured zero width');
+    if (parsed.glyphCount !== font.count)
+      problems.push(`glyphCount ${parsed.glyphCount} != ${font.count}`);
+    for (const g of font.glyphs) {
+      if (!parsed.cpMap.has(parseInt(g.code, 16)))
+        problems.push(`codepoint U+${g.code} (${g.name}) missing`);
+    }
+    // Every glyph must carry at least one path with usable points.
+    const empty = parsed.glyphs.filter(g => g.nPaths === 0 ||
+      g.paths.every(p => p.pc < 2)).length;
+    if (empty) problems.push(`${empty} glyphs have no drawable contour`);
 
-  glyphTotal += parsed.glyphCount;
-  if (problems.length) {
-    ok = false;
-    console.log(`FAIL  ${font.file}  ${problems.join('; ')}`);
-  } else {
-    console.log(`PASS  ${font.file.padEnd(20)} ${parsed.glyphCount} glyphs`);
+    const text = font.glyphs.map(g => g.char).join('');
+    if (afMeasure(parsed, text, 128) <= 0) problems.push('measured zero width');
+
+    glyphTotal += parsed.glyphCount;
+    if (problems.length) {
+      ok = false;
+      console.log(`FAIL  ${file}  ${problems.join('; ')}`);
+    } else {
+      console.log(`PASS  ${file.padEnd(24)} ${parsed.glyphCount} glyphs`);
+    }
   }
 }
 
+const files = fonts.length + fonts.filter(f => f.outline).length;
 console.log(ok
-  ? `\nALL PASS - ${fonts.length} fonts, ${glyphTotal} glyphs decode via af.js`
+  ? `\nALL PASS - ${files} font files (${fonts.length} categories x2 sets), ${glyphTotal} glyphs decode via af.js`
   : '\nFAILURES DETECTED');
 process.exit(ok ? 0 : 1);

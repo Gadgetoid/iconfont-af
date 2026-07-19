@@ -1,10 +1,15 @@
 /*
- * install.js - install .ppf fonts onto a MicroPython badge from the explore page.
+ * install.js - install .af fonts onto a MicroPython badge from the explore page.
  *
  * Fonts live in the badge's ROMFS partition. Installing one reads the partition's
  * current image, merges the font file into it (so firmware files survive), and
  * writes the repacked image back. The badge is restarted on disconnect so it
  * remounts /rom and sees the new files.
+ *
+ * There is no separate connect step: clicking a font's Install button connects
+ * first if needed. A small indicator shows the connection and is clicked to
+ * connect on its own or to disconnect (which restarts the badge). Progress and
+ * errors surface as a transient bubble out of that indicator, re-shown on hover.
  *
  * The ROMFS format, the repack and the serial transport all come from
  * js/romfs.js, js/romfs-deploy.js and js/mp-serial.js.
@@ -28,34 +33,94 @@ const PHASE_HINTS = {
   done: "Written.",
 };
 
+/** How long a status bubble lingers before fading, unless hovered. */
+const BUBBLE_MS = 4500;
+
 /**
- * Wire up the connect button and font install buttons.
+ * Wire up the connection indicator and font install buttons.
  *
- * @param {{connectButton: HTMLElement, statusEl: HTMLElement}} deps
+ * @param {{indicator: HTMLElement}} deps
  * @returns {{refreshButtons: () => void}} refreshButtons re-syncs every
- *   `.install-btn` with the connection state; call it after re-rendering groups.
+ *   `.install-btn` with the busy state; call it after re-rendering groups.
  */
-export function initInstall({ connectButton, statusEl }) {
+export function initInstall({ indicator }) {
+  const supported = isWebSerialSupported();
   /** @type {MicroPythonSerial|null} */
   let mp = null;
   let busy = false;
-
-  function status(message, kind = "") {
-    statusEl.textContent = message ?? "";
-    statusEl.className = `istatus ${kind}`;
-  }
 
   function connected() {
     return mp !== null && mp.isOpen;
   }
 
-  function refreshButtons() {
-    const ready = connected() && !busy;
-    for (const btn of document.querySelectorAll(".install-btn")) {
-      btn.disabled = !ready;
+  // A bubble that pops out of the indicator with the latest status message.
+  const bubble = document.createElement("div");
+  bubble.className = "badge-msg";
+  document.body.appendChild(bubble);
+  let lastMsg = "";
+  let lastKind = "";
+  let hovering = false;
+  let hideTimer = null;
+
+  function showBubble(message, kind, sticky) {
+    bubble.textContent = message;
+    bubble.className = `badge-msg show ${kind}`;
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = null;
+    if (!sticky) {
+      hideTimer = setTimeout(() => {
+        if (!hovering) bubble.classList.remove("show");
+      }, BUBBLE_MS);
     }
-    connectButton.disabled = busy;
-    connectButton.textContent = connected() ? "Restart badge & disconnect" : "Connect badge";
+  }
+
+  /** Record the latest message and pop it out of the indicator. */
+  function status(message, kind = "") {
+    lastMsg = message ?? "";
+    lastKind = kind;
+    if (lastMsg) showBubble(lastMsg, kind, false);
+    else bubble.classList.remove("show");
+  }
+
+  function idleHint() {
+    return connected()
+      ? "Connected. Click to restart the badge and disconnect."
+      : "Click to connect a badge over USB.";
+  }
+
+  /** Reflect the connection in the top-right indicator. */
+  function paintIndicator() {
+    if (!supported) {
+      indicator.textContent = "Badge n/a";
+      indicator.className = "badge-ind off";
+    } else if (busy) {
+      indicator.textContent = "◐ Badge";
+      indicator.className = "badge-ind busy";
+    } else if (connected()) {
+      indicator.textContent = "● Badge";
+      indicator.className = "badge-ind on";
+    } else {
+      indicator.textContent = "○ Badge";
+      indicator.className = "badge-ind";
+    }
+  }
+
+  // Re-show the latest message (or a hint) while the pointer rests on the badge.
+  indicator.addEventListener("mouseenter", () => {
+    hovering = true;
+    showBubble(lastMsg || idleHint(), lastMsg ? lastKind : "", true);
+  });
+  indicator.addEventListener("mouseleave", () => {
+    hovering = false;
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => bubble.classList.remove("show"), 600);
+  });
+
+  function refreshButtons() {
+    for (const btn of document.querySelectorAll(".install-btn")) {
+      btn.disabled = busy || !supported;
+    }
+    paintIndicator();
   }
 
   function setBusy(value) {
@@ -71,12 +136,16 @@ export function initInstall({ connectButton, statusEl }) {
   /* Connection                                                     */
   /* -------------------------------------------------------------- */
 
+  /**
+   * Open a badge and enter the raw REPL. Returns true on success. Must be called
+   * from a user gesture so the serial port picker is allowed to open.
+   */
   async function connect() {
     let port;
     try {
       port = await MicroPythonSerial.requestPort({ filters: MICROPYTHON_USB_FILTERS });
     } catch {
-      return; // The user dismissed the picker.
+      return false; // The user dismissed the picker.
     }
 
     mp = new MicroPythonSerial();
@@ -86,9 +155,9 @@ export function initInstall({ connectButton, statusEl }) {
       await mp.open(port);
       await mp.enterRawRepl();
       const parts = await queryRomfs(mp);
-      const p = parts[PARTITION];
-      if (!p) throw new Error(`the badge has no ROMFS partition ${PARTITION}`);
-      status(`Connected. ROMFS${PARTITION} holds ${p.size} bytes. Pick a font to install.`, "ok");
+      if (!parts[PARTITION]) throw new Error(`the badge has no ROMFS partition ${PARTITION}`);
+      status(`Connected. ROMFS${PARTITION} holds ${parts[PARTITION].size} bytes.`, "ok");
+      return true;
     } catch (err) {
       status(err.message, "bad");
       try {
@@ -97,6 +166,7 @@ export function initInstall({ connectButton, statusEl }) {
         /* Nothing useful to do. */
       }
       mp = null;
+      return false;
     } finally {
       setBusy(false);
     }
@@ -120,8 +190,8 @@ export function initInstall({ connectButton, statusEl }) {
     status("Disconnected. The badge is restarting.", "ok");
   }
 
-  connectButton.addEventListener("click", () => {
-    if (busy) return;
+  indicator.addEventListener("click", () => {
+    if (busy || !supported) return;
     (connected() ? disconnect() : connect()).catch((err) => {
       status(err.message, "bad");
       setBusy(false);
@@ -150,7 +220,7 @@ export function initInstall({ connectButton, statusEl }) {
       base = null; // Unreadable or not a ROMFS: write a fresh image.
     }
 
-    const path = `${FONT_DIR}/${file}`;
+    const path = `${FONT_DIR}/${file.split("/").pop()}`;
     const image = mergeRomfs(base, [{ path, data: font }]);
     await deployRomfs(mp, image, { partition: PARTITION, onProgress });
 
@@ -161,11 +231,17 @@ export function initInstall({ connectButton, statusEl }) {
   }
 
   // Delegated: install buttons are created and destroyed on every re-render.
+  // Connect on demand so the whole flow is one click from a font tile.
   document.addEventListener("click", (event) => {
     const btn = event.target.closest?.(".install-btn");
-    if (!btn || btn.disabled || !connected() || busy) return;
+    if (!btn || btn.disabled || busy || !supported) return;
+    const { file, title = file } = btn.dataset;
     setBusy(true);
-    installFont(btn.dataset.file, btn.dataset.title || btn.dataset.file)
+    (async () => {
+      if (!connected() && !(await connect())) return;
+      setBusy(true);
+      await installFont(file, title);
+    })()
       .catch((err) => status(err.message, "bad"))
       .finally(() => setBusy(false));
   });
@@ -174,15 +250,13 @@ export function initInstall({ connectButton, statusEl }) {
   /* Setup                                                          */
   /* -------------------------------------------------------------- */
 
-  if (!isWebSerialSupported()) {
-    connectButton.disabled = true;
+  if (!supported) {
     status(
       "Web Serial is not available in this browser, so installing is disabled. Use Chrome, Edge or Opera.",
       "bad",
     );
-  } else {
-    status("Plug the badge in over USB and connect to install fonts straight onto it.");
   }
+  refreshButtons();
 
   return { refreshButtons };
 }

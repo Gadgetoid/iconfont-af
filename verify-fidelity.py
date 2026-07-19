@@ -5,7 +5,8 @@ Unlike the bitmap .ppf, the .af format is a lossy vector re-encoding (contours
 scaled to signed 8-bit coordinates), so an exact pixel round-trip is impossible.
 Instead this independently decodes each .af (following the af.js layout), fills
 its contours with the even-odd rule, and compares the rasterised shape to the
-source sprite's white pixels by intersection-over-union.
+source sprite's pixels by intersection-over-union: the white fill for the default
+set, the black linework for the outline set.
 
 Both shapes are normalised to their own bounding boxes. A faithful glyph scores a
 high IoU; thin outlines legitimately bottom out around 0.75 because a vector fill
@@ -53,13 +54,24 @@ def category_of(slug, cats):
     return slug.split("_")[0]
 
 
-def white_mask(path):
+def pixel_mask(path, ink):
     im = Image.open(path).convert("RGBA")
     if im.size != (GRID, GRID):
         im = im.resize((GRID, GRID), Image.NEAREST)
     px = im.load()
-    return [[px[x, y][3] > 127 and px[x, y][0] > 200 and px[x, y][1] > 200 and px[x, y][2] > 200
-             for x in range(GRID)] for y in range(GRID)]
+    mask = [[False] * GRID for _ in range(GRID)]
+    for y in range(GRID):
+        for x in range(GRID):
+            r, g, b, a = px[x, y]
+            if a <= 127:
+                continue
+            white = r > 200 and g > 200 and b > 200
+            mask[y][x] = white if ink == "white" else not white
+    return mask
+
+
+# (filename suffix, which opaque tone the set keeps), matching build.py.
+VARIANTS = [("", "white"), ("_outline", "black")]
 
 
 def content_bounds(mask):
@@ -164,18 +176,20 @@ def main():
     scores = []
     for category in sorted(grouped):
         files = grouped[category]
-        glyphs = decode_af((DIST / f"{category}.af").read_bytes())
-        cat_worst = 1.0
-        for glyph, path in zip(glyphs, files):
-            score = iou(rasterise_af(glyph["rings"]), rasterise_mask(white_mask(path)))
-            scores.append(score)
-            cat_worst = min(cat_worst, score)
-            if score < worst[0]:
-                worst = (score, path.name)
-            if score < THRESHOLD:
-                ok = False
-                print(f"FAIL  {path.name}  IoU {score:.3f} < {THRESHOLD}")
-        print(f"  {category:<14} worst IoU {cat_worst:.3f}")
+        for suffix, ink in VARIANTS:
+            name = f"{category}{suffix}.af"
+            glyphs = decode_af((DIST / name).read_bytes())
+            cat_worst = 1.0
+            for glyph, path in zip(glyphs, files):
+                score = iou(rasterise_af(glyph["rings"]), rasterise_mask(pixel_mask(path, ink)))
+                scores.append(score)
+                cat_worst = min(cat_worst, score)
+                if score < worst[0]:
+                    worst = (score, f"{name} {path.name}")
+                if score < THRESHOLD:
+                    ok = False
+                    print(f"FAIL  {name} {path.name}  IoU {score:.3f} < {THRESHOLD}")
+            print(f"  {name:<24} worst IoU {cat_worst:.3f}")
 
     mean = sum(scores) / len(scores)
     print(f"\n{'ALL PASS' if ok else 'FAILURES'} - {len(scores)} glyphs, "
